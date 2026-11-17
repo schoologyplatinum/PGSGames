@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+<base href="https://cdn.jsdelivr.net/gh/harshulsilverspoon/dice_a_million@latest/">
+<meta charset="utf-8" />
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0" />
+<title>Dice a Million</title>
+<style>
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  background: #000; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+canvas.emscripten {
+  display: none; border: 0px none; background-color: black;
+  image-rendering: optimizeQuality; image-rendering: auto;
+  -ms-interpolation-mode: bicubic;
+}
+@keyframes rotation { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+div.loading {
+  position: absolute; top: 0; bottom: 0; left: 0; right: 0;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  pointer-events: none; color: white; font-family: arial; text-align: center; padding: 0 20px;
+}
+.spinner {
+  height: 30px; width: 30px; animation: rotation 0.8s linear infinite;
+  border: 5px solid #bdff00; border-top: 5px solid #719900; border-radius: 100%; margin: 10px;
+}
+#progress { width: 250px; height: 10px; appearance: none; -webkit-appearance: none; padding: 5px; }
+progress[value]::-webkit-progress-bar { background-color: #8492a6; height: 10px; border-radius: 15px; }
+progress[value]::-webkit-progress-value {
+  background-image: -webkit-linear-gradient(left, #719900, #bdff00); height: 10px; border-radius: 15px;
+}
+</style>
+
+<!-- Tab name. The game engine renames the tab to "GameMaker" while it starts; this keeps our title.
+     To rename the tab, change the text on the first line below. -->
+<script>
+(function () {
+  var T = 'Dice a Million';
+  try {
+    Object.defineProperty(document, 'title', { get: function () { return T; }, set: function () {}, configurable: true });
+  } catch (e) {}
+  var t = document.querySelector('title');
+  if (t) {
+    t.textContent = T;
+    new MutationObserver(function () { if (t.textContent !== T) t.textContent = T; })
+      .observe(t, { childList: true, characterData: true, subtree: true });
+  }
+})();
+</script>
+
+<!-- Game folder: the ONLY place the repo address is written. It must end with a slash and
+     must NOT include a file name. Hosts like the game stash delete <base> tags, so this pins it again. -->
+<script>
+(function () {
+  var BASE = 'https://cdn.jsdelivr.net/gh/harshulsilverspoon/dice_a_million@latest/';
+  window.__DAM_BASE = BASE;
+  var b = document.querySelector('base');
+  if (!b) { b = document.createElement('base'); document.head.insertBefore(b, document.head.firstChild); }
+  b.href = BASE;
+})();
+</script>
+</head>
+<body>
+<canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+<div class="loading">
+  <div class="spinner" id="spinner"></div>
+  <div id="status">Downloading...</div>
+  <progress value="0" max="100" id="progress" hidden="1"></progress>
+</div>
+
+<script id="tick-worker" type="javascript/worker">
+let running = false;
+let stop_called = false;
+let intervalMs = 16;
+onmessage = (e) => {
+  if (e.data.run) {
+    intervalMs = Math.floor(1000 / e.data.fps);
+    if (!running) { running = true; setTimeout(tick, intervalMs); }
+  } else { stop_called = true; }
+}
+const tick = () => {
+  if (stop_called) { stop_called = false; running = false; return; }
+  const start = new Date().getTime();
+  postMessage('');
+  const end = new Date().getTime();
+  setTimeout(tick, Math.max(start + intervalMs - end, 0));
+}
+</script>
+<script>
+(function () {
+  try {
+    var blob = new Blob([document.querySelector('#tick-worker').textContent]);
+    var worker = new Worker(window.URL.createObjectURL(blob));
+    worker.onmessage = function () { if (typeof GM_tick === 'function') GM_tick(performance.now()); };
+    var isMultiplayer = function () {
+      if (typeof GM_is_multiplayer !== 'function') return false;
+      return GM_is_multiplayer() !== 0;
+    };
+    document.addEventListener('visibilitychange', function () {
+      if (!isMultiplayer()) return;
+      if (document.visibilityState === 'hidden') { worker.postMessage({run: true, fps: 60}); }
+      else { worker.postMessage({run: false}); }
+    });
+  } catch (e) { console.error('tick worker failed', e); }
+})();
+</script>
+
+<!-- mus.dat: if the repo holds it in parts (mus.dat.part1, part2, ...) they are joined back together
+     here. If the repo holds a normal mus.dat, it loads the normal way. -->
+<script>
+(function () {
+  var _open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    var args = Array.prototype.slice.call(arguments);
+    if (typeof url === 'string' && url.indexOf('mus.dat') !== -1 && url.indexOf('.part') === -1) {
+      var xhr = this, origArgs = null;
+      xhr.send = function () {
+        var BASE = window.__DAM_BASE, sendArgs = arguments;
+        function normal() { delete xhr.send; return xhr.send.apply(xhr, sendArgs); }
+        function getParts(n, got) {
+          return fetch(BASE + 'mus.dat.part' + n).then(function (r) {
+            if (!r.ok) { if (n === 1) return null; return got; }
+            return r.arrayBuffer().then(function (buf) { got.push(buf); return n >= 20 ? got : getParts(n + 1, got); });
+          });
+        }
+        getParts(1, []).then(function (p) {
+          if (!p || !p.length) return normal();
+          var total = 0, i; for (i = 0; i < p.length; i++) total += p[i].byteLength;
+          var combined = new Uint8Array(total), off = 0;
+          for (i = 0; i < p.length; i++) { combined.set(new Uint8Array(p[i]), off); off += p[i].byteLength; }
+          function def(k, v) { Object.defineProperty(xhr, k, { value: v, configurable: true }); }
+          def('response', combined.buffer); def('status', 200); def('statusText', 'OK');
+          def('readyState', 4); def('responseURL', BASE + 'mus.dat');
+          xhr.dispatchEvent(new Event('readystatechange'));
+          xhr.dispatchEvent(new ProgressEvent('progress', { lengthComputable: true, loaded: total, total: total }));
+          xhr.dispatchEvent(new ProgressEvent('load', { lengthComputable: true, loaded: total, total: total }));
+          xhr.dispatchEvent(new ProgressEvent('loadend', { lengthComputable: true, loaded: total, total: total }));
+        }).catch(function (e) { console.error(e); normal(); });
+      };
+    }
+    return _open.apply(this, args);
+  };
+})();
+</script>
+
+<script>
+var statusElement = document.getElementById("status");
+var progressElement = document.getElementById("progress");
+var spinnerElement = document.getElementById("spinner");
+var canvasElement = document.getElementById("canvas");
+canvasElement.addEventListener("click", function() { canvasElement.focus(); });
+var startingHeight, startingWidth, startingAspect;
+
+var Module = {
+  preRun: [], postRun: [],
+  print: (function () {
+    return function (text) {
+      if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(" ");
+      console.log(text);
+      if (text === "Entering main loop.") ensureAspectRatio();
+    };
+  })(),
+  printErr: function (text) {
+    if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(" ");
+    console.error(text);
+    window.__damErrs = window.__damErrs || []; window.__damErrs.push(String(text).slice(0, 200));
+  },
+  canvas: document.getElementById("canvas"),
+  // Always look for the game's files (wasm, data...) in the game's folder
+  locateFile: function (path) {
+    return /^(https?:|blob:|data:)/.test(path) ? path : window.__DAM_BASE + path;
+  },
+  setStatus: function (text) {
+    if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: "" };
+    if (text === Module.setStatus.last.text) return;
+    var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+    var now = Date.now();
+    if (m && now - Module.setStatus.last.time < 30) return;
+    Module.setStatus.last.time = now;
+    Module.setStatus.last.text = text;
+    if (m) {
+      text = m[1];
+      progressElement.value = parseInt(m[2]) * 100;
+      progressElement.max = parseInt(m[4]) * 100;
+      progressElement.hidden = false;
+      spinnerElement.hidden = false;
+    } else {
+      progressElement.value = null; progressElement.max = null; progressElement.hidden = true;
+      if (!text) { spinnerElement.style.display = "none"; canvasElement.style.display = "block"; ensureAspectRatio(); }
+    }
+    statusElement.innerHTML = text;
+  },
+  totalDependencies: 0,
+  monitorRunDependencies: function (left) {
+    this.totalDependencies = Math.max(this.totalDependencies, left);
+    Module.setStatus(left ? "Preparing... (" + (this.totalDependencies - left) + "/" + this.totalDependencies + ")" : "All downloads complete.");
+  },
+};
+Module.setStatus("Downloading...");
+function showFatal(msg) {
+  var lines = [msg].concat((window.__damErrs || []).slice(-3));
+  spinnerElement.style.display = "none";
+  progressElement.hidden = true;
+  statusElement.style.whiteSpace = "pre-line";
+  statusElement.style.fontSize = "14px";
+  statusElement.textContent = "The game hit an error:\n" + lines.join("\n");
+  Module.setStatus = function (text) { if (text) Module.printErr("[post-exception status] " + text); };
+}
+window.onerror = function (msg, src, line) {
+  showFatal(String(msg) + (src ? " (" + String(src).split("/").pop() + ":" + line + ")" : ""));
+};
+window.addEventListener("unhandledrejection", function (e) {
+  showFatal("Promise error: " + String((e.reason && (e.reason.message || e.reason)) || "unknown"));
+});
+if (typeof window === "object") {
+  Module['arguments'] = window.location.search.substr(1).trim().split('&');
+  if (!Module['arguments'][0]) Module['arguments'] = [];
+}
+
+var g_pWadLoadCallback = undefined;
+function setWadLoadCallback(cb) { g_pWadLoadCallback = cb; }
+var g_pAddAsyncMethod = -1;
+function setAddAsyncMethod(m) { g_pAddAsyncMethod = m; }
+var g_pJSExceptionHandler = undefined;
+function setJSExceptionHandler(h) { if (typeof h == "function") g_pJSExceptionHandler = h; }
+function hasJSExceptionHandler() { return (g_pJSExceptionHandler != undefined) && (typeof g_pJSExceptionHandler == "function"); }
+function doJSExceptionHandler(j) { if (typeof g_pJSExceptionHandler == "function") g_pJSExceptionHandler(JSON.parse(j)); }
+
+function manifestFiles() {
+  return ["runner.data","runner.js","runner.wasm","audio-worklet.js","game.unx","mus.dat","snd.dat","resources/eb.mp4"].join(";");
+}
+function manifestFilesMD5() {
+  return ["f72bbdcbdcd1d3841ceaa4a4e25311a5","b7692ef32b6fab43c77fb58735db6034","75dbb242c2e3c7a074418a2ed001b1fa","e8f1e8db8cf996f8715a6f2164c2e44e","fc7cc2bc1c5fa5c557eb1734440275a1","48d4f0d2c6d41ff77166028cf5cd0447","0e648dc17529bd2dcd011b106c3af2e4","df927c8b5ff0d54d9460330091b5b0ba"];
+}
+function onFirstFrameRendered() {}
+function onGameSetWindowSize(width, height) {
+  startingHeight = height; startingWidth = width;
+  startingAspect = startingWidth / startingHeight;
+  ensureAspectRatio();
+}
+function ensureAspectRatio() {
+  if (!canvasElement || startingHeight === undefined || startingWidth === undefined) return;
+  const maxWidth = window.innerWidth;
+  const maxHeight = window.innerHeight;
+  var newHeight, newWidth;
+  if (startingHeight / maxHeight > startingWidth / maxWidth) {
+    newHeight = maxHeight; newWidth = newHeight * startingAspect;
+  } else {
+    newWidth = maxWidth; newHeight = newWidth / startingAspect;
+  }
+  canvasElement.style.height = newHeight + "px";
+  canvasElement.style.width = newWidth + "px";
+}
+const resizeObserver = new ResizeObserver(() => {
+  window.requestAnimationFrame(ensureAspectRatio);
+  setTimeout(() => window.requestAnimationFrame(ensureAspectRatio), 100);
+});
+resizeObserver.observe(document.body);
+
+var read_ptr = 0;
+read_int = () => {
+  var heap_slice = Module["HEAPU8"].subarray(read_ptr, read_ptr + 4);
+  var buffer = new ArrayBuffer(4);
+  var barray = new Uint8Array(buffer);
+  for (var i = 0; i < 4; i++) barray[i] = heap_slice[i];
+  var int = new Int32Array(buffer)[0];
+  read_ptr += 4;
+  return int;
+};
+read_pointer = () => {
+  var ptr = Module.getValue(read_ptr, "*");
+  read_ptr += 8;
+  return ptr;
+};
+</script>
+
+<!-- The game engine, loaded from the game folder above. -->
+<script>
+(function () {
+  var sc = document.createElement('script');
+  sc.async = true;
+  sc.crossOrigin = 'anonymous'; // lets the page show the engine's real error messages
+  sc.src = window.__DAM_BASE + 'runner.js';
+  sc.onerror = function () {
+    document.getElementById('status').textContent = 'Could not load the game engine (' + sc.src + '). Check the address, your connection, or your filter, then reload.';
+    document.getElementById('spinner').style.display = 'none';
+  };
+  document.body.appendChild(sc);
+})();
+</script>
+
+</body>
+</html>
